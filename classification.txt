@@ -1,0 +1,211 @@
+var geometry = ee.Geometry.Polygon(
+  [[[31.576867961606574, 29.86185284782084],
+    [31.91675748797376, 29.86185284782084],
+    [31.91675748797376, 30.107481933099887],
+    [31.576867961606574, 30.107481933099887],
+    [31.576867961606574, 29.86185284782084]]], null, false);
+    
+var imageCollection2024 = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
+  .filterDate('2024-01-01', '2024-12-31')
+  .filterBounds(geometry);
+var image2024 = imageCollection2024.median().select(['B2', 'B3', 'B4', 'B5', 'B6', 'B7', 'B11']).clip(geometry);
+print('2024 Image Collection:', imageCollection2024);
+print('2024 Image:', image2024);
+
+var imageCollection2015 = ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
+  .filterDate('2015-06-01', '2017-12-31')
+  .filterBounds(geometry);
+var image2015 = imageCollection2015.median().select(['B2', 'B3', 'B4', 'B5', 'B6', 'B7', 'B11']).clip(geometry);
+print('2015 Image Collection:', imageCollection2015);
+print('2015 Image:', image2015);
+
+var featureCollection = ee.FeatureCollection([
+  ee.Feature(roadnetwork, {name: 'roads', class: 0}),
+  ee.Feature(vegetation, {name: 'vegetation', class: 1}),
+  ee.Feature(land, {name: 'bare ground', class: 2}),
+  ee.Feature(buildings, {name: 'buildings', class: 3})
+]);
+
+var training = image2024.sampleRegions({
+  collection: featureCollection, 
+  properties: ['class'],
+  scale: 10
+});
+print('Training Data:', training);
+
+var classifierRF2024 = ee.Classifier.smileRandomForest({numberOfTrees: 10}).train(training, 'class', image2024.bandNames());
+var classifierSVM2024 = ee.Classifier.libsvm({kernelType: 'RBF', gamma: 0.5, cost: 30}).train(training, 'class', image2024.bandNames());
+var classifierRF2015 = ee.Classifier.smileRandomForest({numberOfTrees: 10}).train(training, 'class', image2015.bandNames());
+var classifierSVM2015 = ee.Classifier.libsvm({kernelType: 'RBF', gamma: 0.5, cost: 30}).train(training, 'class', image2015.bandNames());
+
+var normalizedImage2024 = image2024.divide(255);
+var normalizedImage2015 = image2015.divide(255);
+
+var classesRF2024 = image2024.classify(classifierRF2024);
+var classesSVM2024 = normalizedImage2024.classify(classifierSVM2024);
+
+var classesRF2015 = image2015.classify(classifierRF2015);
+var classesSVM2015 = normalizedImage2015.classify(classifierSVM2015);
+
+var palette = ['0800FF', '16B200', 'F0FF00', 'BEBEBE'];
+
+Map.centerObject(geometry, 9);
+Map.addLayer(image2024, {bands: ['B4', 'B3', 'B2'],min: 0 , max: 3000, gamma: 1.5}, 'True Color Image 2024');
+Map.addLayer(classesRF2024, {min: 0, max: 3, palette: palette}, 'RF Classes 2024');
+Map.addLayer(classesSVM2024, {min: 0, max: 3, palette: palette}, 'SVM Classes 2024');
+
+Map.addLayer(image2015, {bands: ['B4', 'B3', 'B2'], min: 0 , max: 3000, gamma: 1.5}, 'True Color Image 2015');
+Map.addLayer(classesRF2015, {min: 0, max: 3, palette: palette}, 'RF Classes 2015');
+Map.addLayer(classesSVM2015, {min: 0, max: 3, palette: palette}, 'SVM Classes 2015');
+
+// Display geometries with the training dataset
+Map.addLayer(roadnetwork, {color: '0800FF'}, 'Roads');
+Map.addLayer(vegetation, {color: '16B200'}, 'Vegetation');
+Map.addLayer(land, {color: 'F0FF00'}, 'Bare Ground');
+Map.addLayer(buildings, {color: 'BEBEBE'}, 'Urban');
+
+var trainAccuracyRF24 = classifierRF2024.confusionMatrix();
+print('RF Resubstitution Error Matrix:', trainAccuracyRF24);
+print('RF Training Overall Accuracy:', trainAccuracyRF24.accuracy());
+
+var trainAccuracySVM24 = classifierSVM2024.confusionMatrix();
+print('SVM Resubstitution Error Matrix:', trainAccuracySVM24);
+print('SVM Training Overall Accuracy:', trainAccuracySVM24.accuracy());
+
+var trainAccuracyRF15 = classifierRF2015.confusionMatrix();
+print('RF Resubstitution Error Matrix:', trainAccuracyRF15);
+print('RF Training Overall Accuracy:', trainAccuracyRF15.accuracy());
+
+var trainAccuracySVM15 = classifierSVM2015.confusionMatrix();
+print('SVM Resubstitution Error Matrix:', trainAccuracySVM15);
+print('SVM Training Overall Accuracy:', trainAccuracySVM15.accuracy());
+
+Export.image.toDrive({
+  image: image2024,
+  scale:10,
+  region : geometry,
+  fileNamePrefix: 'classesRF2024',
+  folder: 'buildingclass',
+})
+
+
+// Export.image.toDrive({
+//   image: classesRF2024,
+//   scale:10,
+//   region : geometry,
+//   fileNamePrefix: 'classesRF2024',
+//   folder: 'buildingclass',
+// })
+
+// Export.image.toDrive({
+//   image: classesRF2015,
+//   scale:10,
+//   region : geometry,
+//   fileNamePrefix: 'classesRF2015',
+//   folder: 'buildingclass',
+// })
+
+// Export.image.toDrive({
+//   image: classesSVM2024,
+//   scale:10,
+//   region : geometry,
+//   fileNamePrefix: 'classesSVM2024',
+//   folder: 'buildingclass',
+// })
+
+// Export.image.toDrive({
+//   image: classesSVM2015,
+//   scale:10,
+//   region : geometry,
+//   fileNamePrefix: 'classesSVM2015',
+//   folder: 'buildingclass',
+// })
+
+var SVMdiff = classesSVM2024.subtract(classesSVM2015);
+var RFdiff = classesRF2024.subtract(classesRF2015);
+
+Map.addLayer(SVMdiff, {min: -3, max: 3, palette: palette}, 'SVMdiff 2024 - 2015');
+Map.addLayer(RFdiff, {min: -3, max: 3, palette: palette}, 'RFdiff 2024 - 2015');
+
+// Convert to double
+// SVMdiff = SVMdiff.double();
+// RFdiff = RFdiff.double();
+
+// // Export the images to Google Drive
+// Export.image.toDrive({
+//   image: SVMdiff,
+//   scale: 10,
+//   region: geometry,
+//   fileNamePrefix: 'SVMdiff',
+//   folder: 'buildingclass',
+// });
+
+// Export.image.toDrive({
+//   image: RFdiff,
+//   scale: 10,
+//   region: geometry,
+//   fileNamePrefix: 'RFdiff',
+//   folder: 'buildingclass',
+// });
+
+print('Band names for 2024 image:', image2024.bandNames());
+print('Band names for 2015 image:', image2015.bandNames());
+
+
+print('Training dataset size:', training.size());
+
+var pixelArea = ee.Image.pixelArea();
+
+var classIds = [0,1,2,3];
+
+var calculateArea = function(classId) {
+  // Mask pixels belonging to the current class
+  var classMask = RFdiff.eq(classId);
+  
+  var classArea = pixelArea.updateMask(classMask);
+  
+  var areaM2 = classArea.reduceRegion({
+    reducer: ee.Reducer.sum(),
+    geometry: geometry,
+    scale: 10, 
+    maxPixels: 1e13
+  }).get('area');
+  
+  var areaKm2 = ee.Number(areaM2).divide(1e6);
+  return ee.Feature(null, {class: classId, area_km2: areaKm2});
+};
+
+var areas = classIds.map(function(classId) {
+  return calculateArea(classId);
+});
+
+var areaFeatureCollection = ee.FeatureCollection(areas);
+print('Class Areas (km²):', areaFeatureCollection);
+
+print('area', areas)
+
+Export.table.toDrive({
+  collection: areaFeatureCollection,
+  description: 'RFdiff',
+  fileFormat: 'CSV'
+});
+
+// var pixelSize = 10
+// var buildingMask = RFdiff.eq(3);  // Assuming '3' represents buildings in the classification
+
+// // Apply the mask to keep only the building pixels
+// var buildingPixels = RFdiff.updateMask(buildingMask);
+
+// var pixelCount = buildingPixels.reduceRegion( {
+//     reducer: ee.Reducer.count(),
+//     scale: pixelSize,
+//     maxPixels: 1e13
+// });
+
+// // Display the total number of pixels with significant NDVI change
+// var pixelCount = pixelCount.get('3').getInfo();
+// print(pixelCount)
+
+// // Compute the surface area (in km²) with significant NDVI change
+// var surfaceArea = (pixelCount * (pixelSize^2)) / (1e6);
+// print('Buildings Area:', surfaceArea)

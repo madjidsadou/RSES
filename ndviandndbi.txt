@@ -1,0 +1,190 @@
+var poly = ee.Geometry.Polygon(
+  [[[31.576867961606574, 29.86185284782084],
+    [31.91675748797376, 29.86185284782084],
+    [31.91675748797376, 30.107481933099887],
+    [31.576867961606574, 30.107481933099887],
+    [31.576867961606574, 29.86185284782084]]], null, false);
+
+var collection2015 = ee.ImageCollection("LANDSAT/LC08/C02/T1_TOA")
+                  .filterDate('2015-01-01', '2015-12-31')
+                  .filterBounds(poly);
+
+var collection2024 = ee.ImageCollection("LANDSAT/LC08/C02/T1_TOA")
+                  .filterDate('2024-01-01', '2024-12-31')
+                  .filterBounds(poly);
+
+// Function to calculate NDVI
+var calculateNDVI = function(image) {
+  var NDVI = image.normalizedDifference(['B5', 'B4']).rename('NDVI');
+  return image.addBands(NDVI); // Corrected here
+};
+
+var ndvicollection2015 = collection2015.map(calculateNDVI);
+var ndvicomposite2015 = ndvicollection2015.select('NDVI').median();
+
+var ndvicollection2024 = collection2024.map(calculateNDVI);
+var ndvicomposite2024 = ndvicollection2024.select('NDVI').median();
+
+// Define thresholds for classification
+var lowthreshold = 0.2;
+var highthreshold = 0.4;
+
+var classified2015 = ndvicomposite2015.expression(
+   '(NDVI <= low) ? 1 : (NDVI <= high) ? 2 : 3',
+   {
+     'NDVI': ndvicomposite2015.select('NDVI'),
+     'low': lowthreshold,
+     'high': highthreshold,
+   }
+).rename('vegetationdensity2015');
+
+var classified2024 = ndvicomposite2024.expression(
+   '(NDVI <= low) ? 1 : (NDVI <= high) ? 2 : 3',
+   {
+     'NDVI': ndvicomposite2024.select('NDVI'),
+     'low': lowthreshold,
+     'high': highthreshold,
+   }
+).rename('vegetationdensity2024');
+
+var colors = {
+  min: 1,
+  max: 3,
+  palette: ['brown', 'yellow', 'green'] 
+};
+
+var diffveg = classified2024.subtract(classified2015)
+
+// var diffvegClassified = diffveg.expression(
+//   'difference == 0 ? 1 : (difference > 0) ? 2 : 3',
+//   {
+//     'difference': diffveg
+//   }
+// ).rename('diffveg');
+
+
+// var diffVegColors = {
+//   min: 1,
+//   max: 3,
+//   palette: ['gray', 'green', 'red'] 
+// };
+
+
+// Add layers to the map
+Map.addLayer(classified2015.clip(poly), colors, 'Vegetation Density 2015');
+Map.addLayer(classified2024.clip(poly), colors, 'Vegetation Density 2024');
+Map.addLayer(diffveg.clip(poly), colors, 'Vegetation difference between 2024 and 2015');
+Map.centerObject(poly, 11);
+
+Export.image.toDrive({
+  image: diffveg,
+  region: poly,
+  scale:30,
+})
+
+
+
+// Calculate pixel area in square meters
+var areaImage = ee.Image.pixelArea();
+
+// Calculate areas for each vegetation class
+var vegetationClasses = [1, 2, 3]; // Assuming 1, 2, 3 represent different vegetation densities
+
+vegetationClasses.forEach(function(classValue) {
+  var classMask2024 = classified2024.eq(classValue);
+  var classMask2025 = classified2015.eq(classValue);
+  var classMaskvegdiff = diffveg.eq(classValue);
+
+  
+  // Calculate area for this class by multiplying by pixel area and masking
+  var classArea2024 = areaImage.updateMask(classMask2024).reduceRegion({
+    reducer: ee.Reducer.sum(),
+    geometry: poly,
+    scale: 30, 
+    maxPixels: 1e13
+  });
+
+var classArea2015 = areaImage.updateMask(classMask2025).reduceRegion({
+    reducer: ee.Reducer.sum(),
+    geometry: poly,
+    scale: 30, 
+    maxPixels: 1e13
+  });
+  
+var classAreaVegDiff = areaImage.updateMask(classMaskvegdiff).reduceRegion({
+    reducer: ee.Reducer.sum(),
+    geometry: poly,
+    scale: 30, 
+    maxPixels: 1e13
+  });
+  
+  print('Area of vegetation class in 2024 (' + classValue + ') in square km:', classArea2024);
+  print('Area of vegetation class in 2015 (' + classValue + ') in square km:', classArea2015);
+  print('Difference of vegetation class (' + classValue + ') in square km:', classAreaVegDiff);
+
+});
+
+
+var collection2024 = ee.ImageCollection("LANDSAT/LC08/C02/T1_TOA")
+                    .filterDate('2024-01-01', '2024-12-31')
+                    .filterBounds(poly);
+var collection2015 = ee.ImageCollection("LANDSAT/LC08/C02/T1_TOA")
+                    .filterDate('2015-01-01', '2015-12-31')
+                    .filterBounds(poly);
+
+var calculateNDBI = function(image) {
+  var NDBI = image.normalizedDifference(['B6', 'B5']).rename('NDBI'); 
+  return image.addBands(NDBI);
+};
+
+var ndbiCollection2024 = collection2024.map(calculateNDBI);
+var medianNDBI2024 = ndbiCollection2024.select('NDBI').median();
+
+var ndbiCollection2015 = collection2015.map(calculateNDBI);
+var medianNDBI2015 = ndbiCollection2015.select('NDBI').median();
+
+
+// Define a threshold for built-up areas (may require tuning)
+var builtUpThreshold = 0.05;
+var builtUpAreas2015 = medianNDBI2015.gt(builtUpThreshold);
+var builtUpAreas2024 = medianNDBI2024.gt(builtUpThreshold);
+
+var builddiff = builtUpAreas2024.subtract(builtUpAreas2015)
+
+var diffpalette = {
+  min : 0,
+  max : 1,
+  palette: ['red', 'white', 'blue']
+}
+// Visualize
+Map.addLayer(builtUpAreas2024.clip(poly), {palette: ['gray', 'red']}, 'Built-Up Areas 2024');
+Map.addLayer(builtUpAreas2015.clip(poly), {palette: ['gray', 'red']}, 'Built-Up Areas 2015');
+Map.addLayer(builddiff.clip(poly), {  diffpalette: ['gray', 'red']
+ }, 'Built-Up Areas difference');
+
+Map.centerObject(poly, 11);
+
+Export.image.toDrive({
+  image : builtUpAreas2024,
+  scale : 30,
+  region : poly,
+  fileNamePrefix: 'builtUpAreas2024',
+  folder: 'buildings',
+})
+
+Export.image.toDrive({
+  image : builtUpAreas2015,
+  scale : 30,
+  region : poly,
+  fileNamePrefix: 'builtUpAreas2015',
+  folder: 'buildings'
+})
+
+Export.image.toDrive({
+  image : builddiff,
+  scale : 30,
+  region : poly,
+  fileNamePrefix: 'builddiff',
+  folder: 'buildings'
+})
+
